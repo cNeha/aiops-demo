@@ -1,0 +1,55 @@
+---
+- name: Verify application recovery
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    app_health_url: "http://localhost:8080/health"
+
+  tasks:
+
+    - name: Check application health endpoint
+      ansible.builtin.uri:
+        url: "{{ app_health_url }}"
+        method: GET
+        status_code: 200
+        return_content: true
+      register: health_result
+      retries: 5
+      delay: 2
+      until: health_result.status == 200
+
+    - name: Display health status
+      ansible.builtin.debug:
+        msg: "Application health: {{ health_result.content }}"
+
+    - name: Check CPU utilization
+      ansible.builtin.shell: |
+        top -bn1 | grep "Cpu(s)" | awk '{print 100 - $8}'
+      register: cpu_usage
+      changed_when: false
+
+    - name: Display CPU
+      ansible.builtin.debug:
+        msg: "Current CPU utilization: {{ cpu_usage.stdout }}%"
+
+    - name: Verify application API
+      ansible.builtin.uri:
+        url: "http://localhost:8080/api/products"
+        method: GET
+        status_code: 200
+        return_content: true
+      register: api_result
+
+    - name: Final verification
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - " AIOps Health Check"
+          - "=========================================="
+          - "Application: HEALTHY"
+          - "HTTP status: {{ health_result.status }}"
+          - "CPU: {{ cpu_usage.stdout }}%"
+          - "Products API: HTTP {{ api_result.status }}"
+          - "=========================================="
