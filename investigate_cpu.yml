@@ -46,6 +46,7 @@
         return_content: true
       register: app_health
       failed_when: false
+      changed_when: false
 
     - name: Display application health
       ansible.builtin.debug:
@@ -57,7 +58,17 @@
       ansible.builtin.set_fact:
         application_degraded: "{{ app_health.status | default(0) != 200 }}"
 
-    - name: Check application process    - name: Identify top CPU-consuming process
+    - name: Check application process
+      ansible.builtin.shell: |
+        pgrep -af "python3.*app.py" || true
+      register: app_process
+      changed_when: false
+
+    - name: Display application process
+      ansible.builtin.debug:
+        msg: "{{ app_process.stdout_lines }}"
+
+    - name: Identify top CPU-consuming process
       ansible.builtin.shell: |
         ps -eo pid,%cpu,%mem,args --sort=-%cpu |
         awk 'NR==2 {print}'
@@ -75,6 +86,7 @@
           http_status: "{{ app_health.status | default('unknown') }}"
           health_response: "{{ app_health.json | default({}) }}"
           top_process: "{{ top_process.stdout | trim }}"
+          application_process: "{{ app_process.stdout_lines }}"
           impact: >-
             {{
               'Application health endpoint is returning HTTP 503'
@@ -85,14 +97,12 @@
     - name: Display AIOps incident report
       ansible.builtin.debug:
         msg: "{{ aiops_incident }}"
-      ansible.builtin.shell: |
-        pgrep -af "python3.*app.py" || true
-      register: app_process
-      changed_when: false
 
-    - name: Display application process
-      ansible.builtin.debug:
-        msg: "{{ app_process.stdout_lines }}"
+    - name: Write incident evidence
+      ansible.builtin.copy:
+        content: "{{ aiops_incident | to_nice_json }}"
+        dest: /tmp/aiops_incident.json
+        mode: "0644"
 
     - name: Generate investigation summary
       ansible.builtin.debug:
@@ -104,4 +114,4 @@
           - "Application degraded: {{ application_degraded }}"
           - "Health HTTP status: {{ app_health.status | default('unknown') }}"
           - "Application process: {{ app_process.stdout | default('not found') }}"
-    
+          - "Top CPU process: {{ top_process.stdout | default('not found') }}"
