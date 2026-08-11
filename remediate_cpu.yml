@@ -6,57 +6,67 @@
 
   vars:
     app_health_url: "http://localhost:8080/health"
+    app_dir: "/home/ec2-user/aiops-demo/app"
 
   tasks:
 
-    - name: Find CPU-intensive application processes
-      ansible.builtin.shell: |
-        ps -eo pid,%cpu,comm,args --sort=-%cpu |
-        awk '/python3.*app.py/ && $2 > 50 {print $1, $2, $4}'
-      register: cpu_processes
+    - name: Check current application health
+      ansible.builtin.uri:
+        url: "{{ app_health_url }}"
+        method: GET
+        status_code:
+          - 200
+          - 503
+        return_content: true
+      register: health_before
       changed_when: false
 
-    - name: Display processes requiring remediation
+    - name: Display current application state
       ansible.builtin.debug:
-        msg: "{{ cpu_processes.stdout_lines }}"
+        msg:
+          - "HTTP status: {{ health_before.status }}"
+          - "Response: {{ health_before.content }}"
 
-    - name: Extract runaway process PIDs
+    - name: Find Product Catalog application process
       ansible.builtin.shell: |
-        ps -eo pid,%cpu,args |
-        awk '/python3.*app.py/ && $2 > 50 {print $1}'
-      register: runaway_pids
+        pgrep -f "python3.*app.py" || true
+      register: app_pids
       changed_when: false
 
-    - name: Terminate runaway processes
-      ansible.builtin.shell: |
-        kill -TERM {{ item }}
-      loop: "{{ runaway_pids.stdout_lines }}"
-      when: runaway_pids.stdout_lines | length > 0
-      register: kill_result
+    - name: Display application PIDs
+      ansible.builtin.debug:
+        msg: "Application PIDs: {{ app_pids.stdout_lines }}"
 
-    - name: Wait for application process to stop
+    - name: Stop Product Catalog application
+      ansible.builtin.shell: |
+        pkill -f "python3.*app.py"
+      when: app_pids.stdout | length > 0
+      changed_when: true
+
+    - name: Wait for old application to stop
       ansible.builtin.pause:
-        seconds: 3
+        seconds: 2
 
-    - name: Start application
+    - name: Start Product Catalog application
       ansible.builtin.shell: |
-        cd /home/ec2-user/aiops-demo/app
-        nohup python3 app.py > /home/ec2-user/aiops-demo/app/app.log 2>&1 &
-      when: runaway_pids.stdout_lines | length > 0
+        cd {{ app_dir }}
+        nohup python3 app.py > app.log 2>&1 &
+      become_user: ec2-user
 
     - name: Wait for application startup
       ansible.builtin.pause:
         seconds: 3
 
-    - name: Check application health
+    - name: Verify application health
       ansible.builtin.uri:
         url: "{{ app_health_url }}"
+        method: GET
         status_code: 200
         return_content: true
-      register: health_result
+      register: health_after
       retries: 5
       delay: 2
-      until: health_result.status == 200
+      until: health_after.status == 200
 
     - name: Display remediation result
       ansible.builtin.debug:
@@ -64,6 +74,5 @@
           - "=========================================="
           - " AIOps Remediation Completed"
           - "=========================================="
-          - "Runaway processes terminated: {{ runaway_pids.stdout_lines }}"
-          - "Application HTTP status: {{ health_result.status }}"
-          - "Application response: {{ health_result.content }}"
+          - "Application HTTP status: {{ health_after.status }}"
+          - "Application response: {{ health_after.content }}"
