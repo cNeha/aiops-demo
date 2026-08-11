@@ -1,0 +1,79 @@
+---
+- name: Investigate high CPU on application server
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    app_health_url: "http://localhost:8080/health"
+
+  tasks:
+
+    - name: Display target information
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+
+    - name: Check CPU utilization
+      ansible.builtin.shell: |
+        top -bn1 | grep "Cpu(s)" | awk '{print 100 - $8}'
+      register: cpu_usage
+      changed_when: false
+
+    - name: Display CPU utilization
+      ansible.builtin.debug:
+        msg: "Current CPU utilization: {{ cpu_usage.stdout }}%"
+
+    - name: Find top CPU-consuming processes
+      ansible.builtin.shell: |
+        ps -eo pid,ppid,%cpu,%mem,comm,args --sort=-%cpu | head -10
+      register: top_processes
+      changed_when: false
+
+    - name: Display top CPU processes
+      ansible.builtin.debug:
+        msg: "{{ top_processes.stdout_lines }}"
+
+    - name: Check application health
+      ansible.builtin.uri:
+        url: "{{ app_health_url }}"
+        method: GET
+        status_code:
+          - 200
+          - 503
+        return_content: true
+      register: app_health
+      failed_when: false
+
+    - name: Display application health
+      ansible.builtin.debug:
+        msg:
+          - "HTTP status: {{ app_health.status | default('unknown') }}"
+          - "Response: {{ app_health.content | default('no response') }}"
+
+    - name: Determine whether application is degraded
+      ansible.builtin.set_fact:
+        application_degraded: "{{ app_health.status | default(0) != 200 }}"
+
+    - name: Check application process
+      ansible.builtin.shell: |
+        pgrep -af "python3.*app.py" || true
+      register: app_process
+      changed_when: false
+
+    - name: Display application process
+      ansible.builtin.debug:
+        msg: "{{ app_process.stdout_lines }}"
+
+    - name: Generate investigation summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - " AIOps Investigation Summary"
+          - "=========================================="
+          - "CPU: {{ cpu_usage.stdout }}%"
+          - "Application degraded: {{ application_degraded }}"
+          - "Health HTTP status: {{ app_health.status | default('unknown') }}"
+          - "Application process: {{ app_process.stdout | default('not found') }}"
