@@ -1,0 +1,23 @@
+---
+- name: AIOps connectivity test
+  hosts: all
+  gather_facts: true
+
+  tasks:
+    - name: Show hostname
+      ansible.builtin.debug:
+        msg: "Connected to {{ ansible_hostname }}"
+
+    - name: Show RHEL version
+      ansible.builtin.debug:
+        msg: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+    - name: Test sudo
+      ansible.builtin.command:
+        cmd: whoami
+      become: true
+      register: result
+
+    - name: Show sudo result
+      ansible.builtin.debug:
+        var: result.stdout
