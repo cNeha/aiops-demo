@@ -57,7 +57,34 @@
       ansible.builtin.set_fact:
         application_degraded: "{{ app_health.status | default(0) != 200 }}"
 
-    - name: Check application process
+    - name: Check application process    - name: Identify top CPU-consuming process
+      ansible.builtin.shell: |
+        ps -eo pid,%cpu,%mem,args --sort=-%cpu |
+        awk 'NR==2 {print}'
+      register: top_process
+      changed_when: false
+
+    - name: Build AIOps incident report
+      ansible.builtin.set_fact:
+        aiops_incident:
+          host: "{{ inventory_hostname }}"
+          incident: "High CPU / application degradation"
+          cpu_utilization: "{{ cpu_usage.stdout | trim }}"
+          application_status: >-
+            {{ 'degraded' if application_degraded else 'healthy' }}
+          http_status: "{{ app_health.status | default('unknown') }}"
+          health_response: "{{ app_health.json | default({}) }}"
+          top_process: "{{ top_process.stdout | trim }}"
+          impact: >-
+            {{
+              'Application health endpoint is returning HTTP 503'
+              if application_degraded
+              else 'No application impact detected'
+            }}
+
+    - name: Display AIOps incident report
+      ansible.builtin.debug:
+        msg: "{{ aiops_incident }}"
       ansible.builtin.shell: |
         pgrep -af "python3.*app.py" || true
       register: app_process
@@ -77,3 +104,4 @@
           - "Application degraded: {{ application_degraded }}"
           - "Health HTTP status: {{ app_health.status | default('unknown') }}"
           - "Application process: {{ app_process.stdout | default('not found') }}"
+    
