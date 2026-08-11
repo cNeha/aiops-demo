@@ -1,0 +1,69 @@
+---
+- name: Remediate high CPU on application server
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    app_health_url: "http://localhost:8080/health"
+
+  tasks:
+
+    - name: Find CPU-intensive application processes
+      ansible.builtin.shell: |
+        ps -eo pid,%cpu,comm,args --sort=-%cpu |
+        awk '/python3.*app.py/ && $2 > 50 {print $1, $2, $4}'
+      register: cpu_processes
+      changed_when: false
+
+    - name: Display processes requiring remediation
+      ansible.builtin.debug:
+        msg: "{{ cpu_processes.stdout_lines }}"
+
+    - name: Extract runaway process PIDs
+      ansible.builtin.shell: |
+        ps -eo pid,%cpu,args |
+        awk '/python3.*app.py/ && $2 > 50 {print $1}'
+      register: runaway_pids
+      changed_when: false
+
+    - name: Terminate runaway processes
+      ansible.builtin.shell: |
+        kill -TERM {{ item }}
+      loop: "{{ runaway_pids.stdout_lines }}"
+      when: runaway_pids.stdout_lines | length > 0
+      register: kill_result
+
+    - name: Wait for application process to stop
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Start application
+      ansible.builtin.shell: |
+        cd /home/ec2-user/aiops-demo/app
+        nohup python3 app.py > /home/ec2-user/aiops-demo/app/app.log 2>&1 &
+      when: runaway_pids.stdout_lines | length > 0
+
+    - name: Wait for application startup
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Check application health
+      ansible.builtin.uri:
+        url: "{{ app_health_url }}"
+        status_code: 200
+        return_content: true
+      register: health_result
+      retries: 5
+      delay: 2
+      until: health_result.status == 200
+
+    - name: Display remediation result
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - " AIOps Remediation Completed"
+          - "=========================================="
+          - "Runaway processes terminated: {{ runaway_pids.stdout_lines }}"
+          - "Application HTTP status: {{ health_result.status }}"
+          - "Application response: {{ health_result.content }}"
